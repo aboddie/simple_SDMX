@@ -13,22 +13,38 @@ __author__ = 'Allen Boddie'
 
 import io
 import urllib
+import ssl
 import xml.etree.ElementTree as ET
 from typing import Dict
 from typing import List
+from typing import NamedTuple
 from typing import Optional
 from typing import Tuple
 
 
-# No way to resolve websevice endpoints from SDMX files.
-ENTRY_URL = {
+class Structure_Signature(NamedTuple):
+    stype: str
+    agencyID: str
+    ID: str
+    version: str
+    
+def url_from_signature(signature: Structure_Signature) -> str:
+    ENTRY_URL = {
         "IMF": "https://sdmxcentral.imf.org/ws/public/sdmxapi/rest/",
         "SDMX": "https://registry.sdmx.org/ws/public/sdmxapi/rest/",
-        "ESTAT": "http://ec.europa.eu/eurostat/SDMX/diss-web/rest/",
         "OECD": "http://stats.oecd.org/restsdmx/sdmx.ashx/",
         "UNSD": "http://data.un.org/ws/rest/"
         }
 
+    ws_endpoint = ENTRY_URL.get(signature.agencyID, ENTRY_URL['SDMX'])
+    
+    if signature.version == None:
+        url = (f'{ws_endpoint}{signature.stype}/{signature.agencyID}/{signature.ID}/'
+               f'?format=sdmx-2.1&detail=full&references=none')
+    else:
+        url = (f'{ws_endpoint}{signature.stype}/{signature.agencyID}/{signature.ID}/'
+               f'{signature.version}/?format=sdmx-2.1&detail=full&references=none')
+    return url
 
 def append_client_id(url: str, client_id: str) -> str:
     """Return url with client id appended if the site was created by Knoema. If
@@ -61,32 +77,39 @@ class SDMX():
                                  '/signed-exchange;v=b3'}
             request = urllib.request.Request(uri, headers=headers)
             try:
-                xml = urllib.request.urlopen(request, timeout=timeout).read()
+                xml = urllib.request.urlopen(request, timeout=timeout, context=ssl._create_unverified_context()).read()
                 # Add context=ssl._create_unverified_context()
                 # to urlopen if needed
             except urllib.error.HTTPError as error:
-                raise Exception(f'{error.code} error connecting'
-                                f'to url provided: {uri}')
+                raise Exception(f'{type(self).__name__}: {error.code} Error connecting to url provided: {uri}')
             except urllib.error.URLError:
-                raise Exception(f'Can not connect to url provided: {uri}')
+                raise Exception(f'{type(self).__name__}: Error connecting to url provided: {uri}')
         else:
             try:
                 with open(uri, 'rb') as content_file:
                     xml = content_file.read()
             except FileNotFoundError:
-                raise Exception(f'Can not open file provided: {uri}')
+                raise Exception(f'{type(self).__name__}: Cannot open file provided: {uri}')
         try:
             tree = ET.ElementTree(ET.fromstring(xml))
             root = tree.getroot()
         except ET.ParseError:
-            raise Exception(f'Can not read SDMX file: {uri}')
+            raise Exception(f'{type(self).__name__}: Cannot parse SDMX file: {uri}')
         self.namespaces = dict(
             [node for _, node in ET.iterparse(io.BytesIO(xml),
                                               events=['start-ns'])])
         self.version = self._get_version(self.namespaces)
         self.header = dict()
-        for element in root.find(self._get_ns('Header'), self.namespaces):
-            self.header[element.tag.rpartition('}')[2]] = element.text
+        try:
+            for element in root.find(self._get_ns('Header'), self.namespaces):
+                self.header[element.tag.rpartition('}')[2]] = element.text
+        except TypeError: #SDMX v2.0 empty namespace REMOVE clean up
+            try:
+                for element in root.find(f'{{{self.namespaces[""]}}}Header'):
+                    self.header[element.tag.rpartition('}')[2]] = element.text
+            except (TypeError, KeyError):
+                for element in root.find(f'{{{self.namespaces["message"]}}}Header'):
+                    self.header[element.tag.rpartition('}')[2]] = element.text
         self._extra_steps(root, timeout)
 
     def _extra_steps(self, root: ET.Element, timeout: int) -> None:
@@ -130,10 +153,12 @@ class SDMX():
             'Name': 'http://www.sdmx.org/resources/sdmxml/'
                     'schemas/v2_1/common',
             'DataStructureComponents': 'http://www.sdmx.org/resources/'
-                                       'sdmxml/schemas/v2_1/structure'
+                                       'sdmxml/schemas/v2_1/structure',
+            'Dataflow': 'http://www.sdmx.org/resources/sdmxml/schemas/v2_1/structure',
+            'Structure':'http://www.sdmx.org/resources/sdmxml/schemas/v2_1/structure'
             }
         for ns_prefix, ns_uri in self.namespaces.items():
-            if ns_uri == ns_dict[element_name]:
+            if ns_uri == ns_dict.get(element_name,''):
                 return f'{ns_prefix}:{element_name}'
         return f'{element_name}'
 
@@ -184,7 +209,8 @@ class _ValidateSeriesWithDSD():
         supplied dimension.
         '''
         try:
-            return series.metadata[dimension] in dsd.dimensions[dimension].codes()
+            return (series.metadata[dimension] in
+                    dsd.dimensions[dimension].codes())
         except KeyError:
             raise Exception(f'Invalid dimension: {dimension}')
 
@@ -193,11 +219,35 @@ class _ValidateSeriesWithDSD():
         '''Returns a dictonary with names for dimensions and values.'''
         human_readable = dict()
         for dimension_id, code_list in dsd.dimensions.items():
-            human_readable[dimension_id] = code_list.name_from_code(series.metadata[dimension_id])
+            human_readable[dimension_id] = code_list.name_from_code(
+                series.metadata.get(dimension_id,''))
             # Not possible to resolve dimension id for example
             # counterpart area (the dimension name) in ECOFIN
         return human_readable
 
+class Dataflow(SDMX):
+    
+    __slots__ = ['name','dsd']
+    
+    def _extra_steps(self, root: ET.Element, timeout: int) -> None:
+        self.name = root.find(f'.//{self._get_ns("Dataflow")}'
+                              f'/{self._get_ns("Name")}', self.namespaces
+                              ).text
+        structure = root.find(f'.//{self._get_ns("Dataflow")}'
+                              f'/{self._get_ns("Structure")}', self.namespaces
+                              )
+        if len(structure) == 1:
+            dsd_attrib = structure[0].attrib
+            agency_id = dsd_attrib['agencyID']
+            dsd_id = dsd_attrib['id']
+            dsd_version = dsd_attrib['version']
+            self.dsd = Structure_Signature(stype = 'datastructure',
+                           agencyID = agency_id,
+                           ID = dsd_id,
+                           version = dsd_version)
+        else:
+            raise Exception(f'{self.name}: Complex dataflows not supported')
+            
 
 class DSD(_ValidateSeriesWithDSD, SDMX):
     '''The DSD class is based on the SDMX class. It adds a dict
@@ -217,29 +267,31 @@ class DSD(_ValidateSeriesWithDSD, SDMX):
                                    f'{self._get_ns("DataStructureComponents")}'
                                    f'/{self._get_ns("DimensionList")}',
                                    self.namespaces):
-            for dimension_ref in dimension.findall(f'.//{self._get_ns("Enumeration")}'
-                                                   f'/Ref',
-                                                   self.namespaces):
-                cl_url = self._generate_cl_url(dimension_ref)
+            for dimension_ref in dimension.findall(
+                    f'.//{self._get_ns("Enumeration")}'
+                    f'/Ref', self.namespaces):
+                cl = self._generate_codelist_signature(dimension_ref)
                 # TODO: This isn't going to work for imbeded codelists
                 # such as those produced by EcOS. We still have a list
                 # Name and indicator list are all that are important.
                 # Maybe make a structure to hold them and use CodeList class
                 # to populate if URL otherwise populate from DSD XML.
-                self.dimensions[dimension.attrib['id']] = CodeList(cl_url, timeout=timeout)
+                self.dimensions[dimension.attrib['id']] = (
+                    CodeList(url_from_signature(cl), timeout=timeout))
         # TODO: Low priority, add attributes and measures
 
     def __len__(self) -> int:
         return len(self.dimensions)
 
     @staticmethod
-    def _generate_cl_url(cl_ref: ET.Element) -> str:
+    def _generate_codelist_signature(cl_ref: ET.Element) -> str:
         cl_agency = cl_ref.attrib['agencyID']
         cl_version = cl_ref.attrib['version']
         cl_id = cl_ref.attrib['id']
-        ws_endpoint = ENTRY_URL.get(cl_agency, ENTRY_URL['SDMX'])
-        return f'{ws_endpoint}codelist/{cl_agency}/{cl_id}/{cl_version}/?' \
-               f'format=sdmx-2.1&detail=full&references=none'
+        return Structure_Signature(stype = 'codelist',
+               agencyID = cl_agency,
+               ID = cl_id,
+               version = cl_version)
 
     def validate_series(self, series) -> bool:
         '''Returns true if all dimensions for DSD are present and populated
@@ -276,8 +328,8 @@ class CodeList(SDMX):
         for code in root.findall(f'.//{self._get_ns("Codelist")}'
                                  f'/{self._get_ns("Code")}',
                                  self.namespaces):
-            self.indicators[code.attrib['id']] = code.find(f'.//{self._get_ns("Name")}',
-                                                           self.namespaces).text
+            self.indicators[code.attrib['id']] = code.find(
+                f'.//{self._get_ns("Name")}', self.namespaces).text
 
     def __len__(self) -> int:
         return len(self.indicators)
@@ -292,10 +344,10 @@ class CodeList(SDMX):
 
     def name_from_code(self, code: str) -> str:
         '''Returns the name from the code'''
-        try:
-            return self.indicators[code]
-        except KeyError:
-            raise Exception('Invalid code: {code}')
+#        try:
+        return self.indicators.get(code,'Invalid code')
+#        except KeyError:
+#            raise Exception(f'Invalid code: {code}')
 
 
 class SDMXTimeseries(_ValidateSeriesWithDSD):
@@ -304,17 +356,23 @@ class SDMXTimeseries(_ValidateSeriesWithDSD):
     __slots__ = ['metadata', 'frequency', 'scale', 'data', 'invalid_data',
                  'time_period_coverage']
 
-    def __init__(self, xmlseries: ET.Element) -> None:
+    def __init__(self, xmlseries: ET.Element, version: str, _dsdns: str = '') -> None:
         self.metadata = xmlseries.attrib.copy()
         self.frequency = self.metadata.get('FREQ', 'UNKNOWN')[0]
         self.scale = self.metadata.get('UNIT_MULT', 'UNKNOWN')[0]
         self.data = dict()
         self.invalid_data = dict()
-        for obs in xmlseries.iter('Obs'):
+        if version == '2.1':
+            searchterm = 'Obs'
+        else:
+            searchterm = (f'{{{_dsdns}}}Obs')
+        for obs in xmlseries.iter(searchterm):
             try:
-                self.data[obs.attrib['TIME_PERIOD']] = float(obs.attrib['OBS_VALUE'])
-            except ValueError:
-                self.invalid_data[obs.attrib['TIME_PERIOD']] = obs.attrib['OBS_VALUE']
+                self.data[obs.attrib['TIME_PERIOD']] = (
+                    float(obs.get('OBS_VALUE')))
+            except (ValueError, TypeError):
+                self.invalid_data[obs.attrib['TIME_PERIOD']] = (
+                    obs.get('OBS_VALUE',''))
         self.time_period_coverage = [*self.data]
         self.time_period_coverage.sort()
         # TODO: Works for A Q M, maybe not other frequencies. If need custom
@@ -370,37 +428,88 @@ class SDMXDataFile(SDMX):
     __slots__ = ['dsd', 'series']
 
     def _extra_steps(self, root: ET.Element, timeout: int) -> None:
-        self.dsd = self._generate_dsd_url(self.namespaces)
+        uri, structure = self._get_structure_signiture(self.namespaces)
+        if structure.stype == 'dataflow':
+            url = url_from_signature(structure)
+            self.dsd = Dataflow(url, timeout).dsd
+        elif structure.stype == 'dataprovision':
+            raise Exception(f'Provision agreements not support, and generally not publicly accessible: {url}')
+        elif structure.stype == 'datastructure':
+            self.dsd = structure
+        else:
+            raise Exception('Could not find DSD declariation in SDMX file.')
         self.series = []
-        if (self.version == '2.1' or self.version == '2.0'):
+        if self.version == '2.1':
             for series in root.iter('Series'):
-                self.series.append(SDMXTimeseries(series))
+                self.series.append(SDMXTimeseries(series,self.version))
+        elif self.version == '2.0':
+            for series in root.iter(f'{{{uri}}}Series'):
+                self.series.append(SDMXTimeseries(series,self.version, uri))
 
     def __len__(self) -> int:
         return len(self.series)
 
     @staticmethod
-    def _generate_dsd_url(namespaces: Dict[str, str]) -> str:
+    def _get_structure_signiture(namespaces: Dict[str, str]) -> str:
+        #TODO: CLEAN THIS JUNK
+        phrase = 'urn:sdmx:org.sdmx.infomodel.datastructure.dataflow='
+        for uri in namespaces.values():
+            if uri.lower().startswith(phrase):
+                agency_id = uri[len(phrase):].split(':')[0]
+                dataflow = uri[len(phrase):].split(':')[1]
+                dataflow_id = dataflow[:dataflow.find('(')]
+                dataflow_version = dataflow[dataflow.find('(')+1:dataflow.rfind(')')]
+                return uri, Structure_Signature(stype = 'dataflow',
+                                           agencyID = agency_id,
+                                           ID = dataflow_id,
+                                           version = dataflow_version)
+        phrase = 'urn:sdmx:org.sdmx.infomodel.registry.provisionagreement='
+        for uri in namespaces.values():
+            if uri.lower().startswith(phrase):
+                agency_id = uri[len(phrase):].split(':')[0]
+                dataprovision = uri[len(phrase):].split(':')[1]
+                dataprovision_id = dataprovision[:dataprovision.find('(')]
+                dataprovision_version = dataprovision[dataprovision.find('(')+1:dataprovision.rfind(')')]
+                return uri, Structure_Signature(stype = 'dataprovision',
+                           agencyID = agency_id,
+                           ID = dataprovision_id,
+                           version = dataprovision_version)
         phrase = 'urn:sdmx:org.sdmx.infomodel.datastructure.datastructure='
         for uri in namespaces.values():
             if uri.lower().startswith(phrase):
                 agency_id = uri[len(phrase):].split(':')[0]
-                ws_endpoint = ENTRY_URL.get(agency_id, ENTRY_URL['SDMX'])
                 dsd = uri[len(phrase):].split(':')[1]
-                dsd_id = dsd[:dsd.find('(')]
-                dsd_version = dsd[dsd.find('(')+1:dsd.rfind(')')]
-                return f'{ws_endpoint}datastructure/{agency_id}/{dsd_id}/' \
-                       f'{dsd_version}/?format=sdmx-2.1&' \
-                       f'detail=full&references=none'
-        return 'UNKNOWN'
+                if '(' in dsd:
+                    dsd_id = dsd[:dsd.find('(')]
+                    dsd_version = dsd[dsd.find('(')+1:dsd.rfind(')')]
+                    return uri, Structure_Signature(stype = 'datastructure',
+                           agencyID = agency_id,
+                           ID = dsd_id,
+                           version = dsd_version)
+                else:
+                    return uri, Structure_Signature(stype = 'datastructure',
+                           agencyID = agency_id,
+                           ID = dsd,
+                           version = None)
+        phrase = 'urn:sdmx:org.sdmx.infomodel.keyfamily.keyfamily='
+        for uri in namespaces.values():
+            if uri.lower().startswith(phrase):
+                agency_id = uri[len(phrase):].split(':')[0]
+                dsd_id = uri[len(phrase):].split(':')[1]
+                dsd_version = uri[len(phrase):].split(':')[2]
+                return uri, Structure_Signature(stype = 'datastructure',
+                           agencyID = agency_id,
+                           ID = dsd_id,
+                           version = dsd_version)
+        return None, Structure_Signature(stype = False,
+                           agencyID = None,
+                           ID = None,
+                           version = None)
 
     def generate_dsd(self) -> DSD:
         '''Returns an instance of the DSD used for this SDMX file.'''
-        if self.dsd == 'UNKNOWN':
-            raise Exception('Could not parse DSD url.')
-        else:
-            return DSD(self.dsd)
-
+        return DSD(url_from_signature(self.dsd))
+        
     def dimensions(self) -> Tuple[str]:
         '''Returns all dimensions used in root.  All series are looped over
         just in case their is an inconsistency in the file
