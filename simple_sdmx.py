@@ -28,23 +28,23 @@ class Structure_Signature(NamedTuple):
     ID: str
     version: str
     
-def url_from_signature(signature: Structure_Signature) -> str:
-    ENTRY_URL = {
-        "IMF": "https://sdmxcentral.imf.org/ws/public/sdmxapi/rest/",
-        "SDMX": "https://registry.sdmx.org/ws/public/sdmxapi/rest/",
-        "OECD": "http://stats.oecd.org/restsdmx/sdmx.ashx/",
-        "UNSD": "http://data.un.org/ws/rest/"
-        }
-
-    ws_endpoint = ENTRY_URL.get(signature.agencyID, ENTRY_URL['SDMX'])
+    def generate_url(self) -> str:
+        ENTRY_URL = {
+            "IMF": "https://sdmxcentral.imf.org/ws/public/sdmxapi/rest/",
+            "SDMX": "https://registry.sdmx.org/ws/public/sdmxapi/rest/",
+            "OECD": "http://stats.oecd.org/restsdmx/sdmx.ashx/",
+            "UNSD": "http://data.un.org/ws/rest/"
+            }
     
-    if signature.version == None:
-        url = (f'{ws_endpoint}{signature.stype}/{signature.agencyID}/{signature.ID}/'
-               f'?format=sdmx-2.1&detail=full&references=none')
-    else:
-        url = (f'{ws_endpoint}{signature.stype}/{signature.agencyID}/{signature.ID}/'
-               f'{signature.version}/?format=sdmx-2.1&detail=full&references=none')
-    return url
+        ws_endpoint = ENTRY_URL.get(self.agencyID, ENTRY_URL['SDMX'])
+        
+        if self.version == None:
+            url = (f'{ws_endpoint}{self.stype}/{self.agencyID}/{self.ID}/'
+                   f'?format=sdmx-2.1&detail=full&references=none')
+        else:
+            url = (f'{ws_endpoint}{self.stype}/{self.agencyID}/{self.ID}/'
+                   f'{self.version}/?format=sdmx-2.1&detail=full&references=none')
+        return url
 
 def append_client_id(url: str, client_id: str) -> str:
     """Return url with client id appended if the site was created by Knoema. If
@@ -277,7 +277,7 @@ class DSD(_ValidateSeriesWithDSD, SDMX):
                 # Maybe make a structure to hold them and use CodeList class
                 # to populate if URL otherwise populate from DSD XML.
                 self.dimensions[dimension.attrib['id']] = (
-                    CodeList(url_from_signature(cl), timeout=timeout))
+                    CodeList(cl.generate_url(), timeout=timeout))
         # TODO: Low priority, add attributes and measures
 
     def __len__(self) -> int:
@@ -430,7 +430,7 @@ class SDMXDataFile(SDMX):
     def _extra_steps(self, root: ET.Element, timeout: int) -> None:
         uri, structure = self._get_structure_signiture(self.namespaces)
         if structure.stype == 'dataflow':
-            url = url_from_signature(structure)
+            url = structure.generate_url()
             self.dsd = Dataflow(url, timeout).dsd
         elif structure.stype == 'dataprovision':
             raise Exception(f'Provision agreements not support, and generally not publicly accessible: {url}')
@@ -451,64 +451,37 @@ class SDMXDataFile(SDMX):
 
     @staticmethod
     def _get_structure_signiture(namespaces: Dict[str, str]) -> str:
-        #TODO: CLEAN THIS JUNK
-        phrase = 'urn:sdmx:org.sdmx.infomodel.datastructure.dataflow='
         for uri in namespaces.values():
-            if uri.lower().startswith(phrase):
-                agency_id = uri[len(phrase):].split(':')[0]
-                dataflow = uri[len(phrase):].split(':')[1]
-                dataflow_id = dataflow[:dataflow.find('(')]
-                dataflow_version = dataflow[dataflow.find('(')+1:dataflow.rfind(')')]
-                return uri, Structure_Signature(stype = 'dataflow',
-                                           agencyID = agency_id,
-                                           ID = dataflow_id,
-                                           version = dataflow_version)
-        phrase = 'urn:sdmx:org.sdmx.infomodel.registry.provisionagreement='
-        for uri in namespaces.values():
-            if uri.lower().startswith(phrase):
-                agency_id = uri[len(phrase):].split(':')[0]
-                dataprovision = uri[len(phrase):].split(':')[1]
-                dataprovision_id = dataprovision[:dataprovision.find('(')]
-                dataprovision_version = dataprovision[dataprovision.find('(')+1:dataprovision.rfind(')')]
-                return uri, Structure_Signature(stype = 'dataprovision',
-                           agencyID = agency_id,
-                           ID = dataprovision_id,
-                           version = dataprovision_version)
-        phrase = 'urn:sdmx:org.sdmx.infomodel.datastructure.datastructure='
-        for uri in namespaces.values():
-            if uri.lower().startswith(phrase):
-                agency_id = uri[len(phrase):].split(':')[0]
-                dsd = uri[len(phrase):].split(':')[1]
-                if '(' in dsd:
-                    dsd_id = dsd[:dsd.find('(')]
-                    dsd_version = dsd[dsd.find('(')+1:dsd.rfind(')')]
-                    return uri, Structure_Signature(stype = 'datastructure',
-                           agencyID = agency_id,
-                           ID = dsd_id,
-                           version = dsd_version)
-                else:
-                    return uri, Structure_Signature(stype = 'datastructure',
-                           agencyID = agency_id,
-                           ID = dsd,
-                           version = None)
-        phrase = 'urn:sdmx:org.sdmx.infomodel.keyfamily.keyfamily='
-        for uri in namespaces.values():
-            if uri.lower().startswith(phrase):
-                agency_id = uri[len(phrase):].split(':')[0]
-                dsd_id = uri[len(phrase):].split(':')[1]
-                dsd_version = uri[len(phrase):].split(':')[2]
-                return uri, Structure_Signature(stype = 'datastructure',
-                           agencyID = agency_id,
-                           ID = dsd_id,
-                           version = dsd_version)
+            phrases = [('dataflow','urn:sdmx:org.sdmx.infomodel.datastructure.dataflow='),
+                       ('dataprovision','urn:sdmx:org.sdmx.infomodel.registry.provisionagreement='),
+                       ('datastructure','urn:sdmx:org.sdmx.infomodel.datastructure.datastructure='),
+                       ('datastructure','urn:sdmx:org.sdmx.infomodel.keyfamily.keyfamily=')]
+            structuretype, _, structuredef = uri.partition('=')
+            for phrasetype, phrase in phrases:
+                if uri.lower().startswith(phrase):
+                    _, _, structuredef = uri.partition('=')
+                    agency, _, remaider = structuredef.partition(":")
+                    name, _, _ = remaider.partition(':')
+                    structureid, _, structure_version = name.partition('(')
+                    if len(structure_version) > 0:
+                        structure_version = structure_version[:structure_version.rfind(')')]
+                        return uri, Structure_Signature(stype = phrasetype,
+                               agencyID = agency,
+                               ID = structureid,
+                               version = structure_version)
+                    else:
+                        return uri, Structure_Signature(stype = phrasetype,
+                               agencyID = agency,
+                               ID = structureid,
+                               version = None)
         return None, Structure_Signature(stype = False,
-                           agencyID = None,
-                           ID = None,
-                           version = None)
+                   agencyID = None,
+                   ID = None,
+                   version = None)
 
     def generate_dsd(self) -> DSD:
         '''Returns an instance of the DSD used for this SDMX file.'''
-        return DSD(url_from_signature(self.dsd))
+        return DSD(self.dsd.generate_url)
         
     def dimensions(self) -> Tuple[str]:
         '''Returns all dimensions used in root.  All series are looped over
