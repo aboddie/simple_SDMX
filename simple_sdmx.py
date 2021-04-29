@@ -12,9 +12,10 @@ __version__ = '0.1'
 __author__ = 'Allen Boddie'
 
 import io
-import urllib
 import ssl
+import urllib
 import xml.etree.ElementTree as ET
+
 from typing import Dict
 from typing import List
 from typing import NamedTuple
@@ -22,13 +23,27 @@ from typing import Optional
 from typing import Tuple
 
 
+def append_client_id(url: str, client_id: str) -> str:
+    '''Return url with client id appended if the site was created by Knoema. If
+    site was not created by Knoema returns url.
+    '''
+    if (url.find('opendataforafrica.org') > 0) or (url.find('knoema.com') > 0):
+        if url.find('&client_id') == -1:
+            return f'{url}&client_id={client_id}'
+    return url
+
+
 class Structure_Signature(NamedTuple):
+    '''This class is used to represent SDMX structures like DSDs, code lists, 
+    dataflows, and provision agreements.
+    '''
     stype: str
     agencyID: str
     ID: str
     version: str
     
     def generate_url(self) -> str:
+        '''Generates url for definition of structue.'''
         ENTRY_URL = {
             "IMF": "https://sdmxcentral.imf.org/ws/public/sdmxapi/rest/",
             "SDMX": "https://registry.sdmx.org/ws/public/sdmxapi/rest/",
@@ -45,15 +60,6 @@ class Structure_Signature(NamedTuple):
             url = (f'{ws_endpoint}{self.stype}/{self.agencyID}/{self.ID}/'
                    f'{self.version}/?format=sdmx-2.1&detail=full&references=none')
         return url
-
-def append_client_id(url: str, client_id: str) -> str:
-    """Return url with client id appended if the site was created by Knoema. If
-    site was not created by Knoema returns url.
-    """
-    if (url.find('opendataforafrica.org') > 0) or (url.find('knoema.com') > 0):
-        if url.find('&client_id') == -1:
-            return f'{url}&client_id={client_id}'
-    return url
 
 
 class SDMX():
@@ -103,7 +109,7 @@ class SDMX():
         try:
             for element in root.find(self._get_ns('Header'), self.namespaces):
                 self.header[element.tag.rpartition('}')[2]] = element.text
-        except TypeError: #SDMX v2.0 empty namespace REMOVE clean up
+        except TypeError: # TODO: SDMX v2.0 empty namespace REMOVE clean up
             try:
                 for element in root.find(f'{{{self.namespaces[""]}}}Header'):
                     self.header[element.tag.rpartition('}')[2]] = element.text
@@ -144,6 +150,8 @@ class SDMX():
                              'sdmxml/schemas/v2_1/structure',
             'DimensionList': 'http://www.sdmx.org/resources/'
                              'sdmxml/schemas/v2_1/structure',
+            'AttributeList': 'http://www.sdmx.org/resources/'
+                             'sdmxml/schemas/v2_1/structure',
             'Enumeration': 'http://www.sdmx.org/resources/'
                            'sdmxml/schemas/v2_1/structure',
             'Codelist': 'http://www.sdmx.org/resources/'
@@ -154,6 +162,9 @@ class SDMX():
                     'schemas/v2_1/common',
             'DataStructureComponents': 'http://www.sdmx.org/resources/'
                                        'sdmxml/schemas/v2_1/structure',
+            'ProvisionAgreement': 'http://www.sdmx.org/resources/sdmxml/schemas/v2_1/structure',
+            'StructureUsage': 'http://www.sdmx.org/resources/sdmxml/schemas/v2_1/structure',
+            'DataProvider': 'http://www.sdmx.org/resources/sdmxml/schemas/v2_1/structure',
             'Dataflow': 'http://www.sdmx.org/resources/sdmxml/schemas/v2_1/structure',
             'Structure':'http://www.sdmx.org/resources/sdmxml/schemas/v2_1/structure'
             }
@@ -174,6 +185,66 @@ class SDMX():
                 elif version == 'v2_0':
                     return '2.0'
         return 'UNKNOWN'
+
+
+class Dataflow(SDMX):
+    '''The Dataflow class is based on the SDMX class. It adds a name of the 
+    Dataflow as well as a Structure_Signature for the dsd. Currently supports 
+    dataflows with one and only one dsd referenced.
+    '''
+    
+    __slots__ = ['name','structure']
+    
+    def _extra_steps(self, root: ET.Element, timeout: int) -> None:
+        self.name = root.find(f'.//{self._get_ns("Dataflow")}'
+                              f'/{self._get_ns("Name")}', self.namespaces
+                              ).text
+        structure = root.findall(f'.//{self._get_ns("Dataflow")}'
+                              f'/{self._get_ns("Structure")}', self.namespaces
+                              )
+        if len(structure) == 1:
+            structure_attrib = structure[0][0].attrib
+            agency_id = structure_attrib['agencyID']
+            structure_id = structure_attrib['id']
+            structure_version = structure_attrib['version']
+            structure_type = structure_attrib['class'].lower()
+            self.structure = Structure_Signature(stype = structure_type,
+                           agencyID = agency_id,
+                           ID = structure_id,
+                           version = structure_version)
+        else:
+            raise Exception(f'{self.name}: Complex dataflows not supported')
+            
+
+class ProvisionAgreements(SDMX):
+    # TODO: Add documentation
+    
+    __slots__ = ['name','structure', 'provider']
+    
+    def _extra_steps(self, root: ET.Element, timeout: int) -> None:
+        self.name = root.find(f'.//{self._get_ns("ProvisionAgreement")}'
+                              f'/{self._get_ns("Name")}', self.namespaces
+                              ).text
+        structure = root.findall(f'.//{self._get_ns("ProvisionAgreement")}'
+                              f'/{self._get_ns("StructureUsage")}', self.namespaces
+                              )
+        print(structure)
+        if len(structure) == 1:
+            structure_attrib = structure[0][0].attrib
+            agency_id = structure_attrib['agencyID']
+            structure_id = structure_attrib['id']
+            structure_version = structure_attrib['version']
+            structure_type = structure_attrib['class'].lower()
+            self.structure = Structure_Signature(stype = structure_type,
+                           agencyID = agency_id,
+                           ID = structure_id,
+                           version = structure_version)
+        else:
+            raise Exception(f'{self.name}: Complex ProvisionAgreements not supported')
+        provider = root.find(f'.//{self._get_ns("ProvisionAgreement")}'
+                      f'/{self._get_ns("DataProvider")}', self.namespaces
+                      )
+        self.provider = provider[0].attrib['id'] # TODO: clean up and expand 
 
 
 class _ValidateSeriesWithDSD():
@@ -224,30 +295,7 @@ class _ValidateSeriesWithDSD():
             # Not possible to resolve dimension id for example
             # counterpart area (the dimension name) in ECOFIN
         return human_readable
-
-class Dataflow(SDMX):
-    
-    __slots__ = ['name','dsd']
-    
-    def _extra_steps(self, root: ET.Element, timeout: int) -> None:
-        self.name = root.find(f'.//{self._get_ns("Dataflow")}'
-                              f'/{self._get_ns("Name")}', self.namespaces
-                              ).text
-        structure = root.find(f'.//{self._get_ns("Dataflow")}'
-                              f'/{self._get_ns("Structure")}', self.namespaces
-                              )
-        if len(structure) == 1:
-            dsd_attrib = structure[0].attrib
-            agency_id = dsd_attrib['agencyID']
-            dsd_id = dsd_attrib['id']
-            dsd_version = dsd_attrib['version']
-            self.dsd = Structure_Signature(stype = 'datastructure',
-                           agencyID = agency_id,
-                           ID = dsd_id,
-                           version = dsd_version)
-        else:
-            raise Exception(f'{self.name}: Complex dataflows not supported')
-            
+          
 
 class DSD(_ValidateSeriesWithDSD, SDMX):
     '''The DSD class is based on the SDMX class. It adds a dict
@@ -256,7 +304,7 @@ class DSD(_ValidateSeriesWithDSD, SDMX):
     a given series.
     '''
 
-    __slots__ = ['name', 'dimensions']
+    __slots__ = ['name', 'dimensions', 'attributes']
 
     def _extra_steps(self, root: ET.Element, timeout: int) -> None:
         self.name = root.find(f'.//{self._get_ns("DataStructure")}'
@@ -278,13 +326,26 @@ class DSD(_ValidateSeriesWithDSD, SDMX):
                 # to populate if URL otherwise populate from DSD XML.
                 self.dimensions[dimension.attrib['id']] = (
                     CodeList(cl.generate_url(), timeout=timeout))
-        # TODO: Low priority, add attributes and measures
+        self.attributes = dict()
+        for attribute in root.find(f'.//{self._get_ns("DataStructure")}/'
+                           f'{self._get_ns("DataStructureComponents")}'
+                           f'/{self._get_ns("AttributeList")}',
+                           self.namespaces):
+            for attribute_ref in attribute.findall(
+                    f'.//{self._get_ns("Enumeration")}'
+                    f'/Ref', self.namespaces):
+                cl = self._generate_codelist_signature(attribute_ref)
+                # TODO: This isn't going to work for imbeded codelists
+                self.attributes[attribute.attrib['id']] = (
+                    CodeList(cl.generate_url(), timeout=timeout))
+                # TODO: Capture Attribute type (Series, Dataset, Observation)
+        # TODO: Very Low priority, measures
 
     def __len__(self) -> int:
         return len(self.dimensions)
 
     @staticmethod
-    def _generate_codelist_signature(cl_ref: ET.Element) -> str:
+    def _generate_codelist_signature(cl_ref: ET.Element) -> Structure_Signature:
         cl_agency = cl_ref.attrib['agencyID']
         cl_version = cl_ref.attrib['version']
         cl_id = cl_ref.attrib['id']
@@ -431,8 +492,10 @@ class SDMXDataFile(SDMX):
         uri, structure = self._get_structure_signiture(self.namespaces)
         if structure.stype == 'dataflow':
             url = structure.generate_url()
-            self.dsd = Dataflow(url, timeout).dsd
+            self.dsd = Dataflow(url, timeout).structure 
+            # TODO: what if the refernce is not a DSD need to check
         elif structure.stype == 'dataprovision':
+            url = structure.generate_url()
             raise Exception(f'Provision agreements not support, and generally not publicly accessible: {url}')
         elif structure.stype == 'datastructure':
             self.dsd = structure
@@ -450,7 +513,7 @@ class SDMXDataFile(SDMX):
         return len(self.series)
 
     @staticmethod
-    def _get_structure_signiture(namespaces: Dict[str, str]) -> str:
+    def _get_structure_signiture(namespaces: Dict[str, str]) -> Structure_Signature:
         for uri in namespaces.values():
             phrases = [('dataflow','urn:sdmx:org.sdmx.infomodel.datastructure.dataflow='),
                        ('dataprovision','urn:sdmx:org.sdmx.infomodel.registry.provisionagreement='),
@@ -481,7 +544,7 @@ class SDMXDataFile(SDMX):
 
     def generate_dsd(self) -> DSD:
         '''Returns an instance of the DSD used for this SDMX file.'''
-        return DSD(self.dsd.generate_url)
+        return DSD(self.dsd.generate_url())
         
     def dimensions(self) -> Tuple[str]:
         '''Returns all dimensions used in root.  All series are looped over
