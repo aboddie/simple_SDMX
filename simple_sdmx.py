@@ -537,7 +537,7 @@ class SDMXDataFile(SDMX):
         try:
             return self._series_counter('metadata', key=dimension)
         except KeyError:
-            raise Exception('Invalid dimension: {dimension}')
+            raise Exception(f'Invalid dimension: {dimension}')
 
     def time_period_coverage(self, frequency: str) -> List[Tuple[str, int]]:
         '''Returns a dictonary of the numbr of occurances of data for a
