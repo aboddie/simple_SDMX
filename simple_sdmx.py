@@ -189,8 +189,8 @@ class SDMX():
 
 class Dataflow(SDMX):
     '''The Dataflow class is based on the SDMX class. It adds a name of the 
-    Dataflow as well as a Structure_Signature for the dsd. Currently supports 
-    dataflows with one and only one dsd referenced.
+    Dataflow as well as a Structure_Signature for the referenced structure.
+    Currently supports Dataflow with one and only one referenced structure.
     '''
     
     __slots__ = ['name','structure']
@@ -213,11 +213,13 @@ class Dataflow(SDMX):
                            ID = structure_id,
                            version = structure_version)
         else:
-            raise Exception(f'{self.name}: Complex dataflows not supported')
+            raise Exception(f'{self.name}: Complex dataflows not supported') #TODO clean up
             
 
 class ProvisionAgreements(SDMX):
-    # TODO: Add documentation
+    '''The ProvisionAgreements class is based on the SDMX class. It adds a name and provider 
+    of the ProvisionAgreements as well as a Structure_Signature for the referenced structure.
+    '''
     
     __slots__ = ['name','structure', 'provider']
     
@@ -228,7 +230,6 @@ class ProvisionAgreements(SDMX):
         structure = root.findall(f'.//{self._get_ns("ProvisionAgreement")}'
                               f'/{self._get_ns("StructureUsage")}', self.namespaces
                               )
-        print(structure)
         if len(structure) == 1:
             structure_attrib = structure[0][0].attrib
             agency_id = structure_attrib['agencyID']
@@ -240,11 +241,14 @@ class ProvisionAgreements(SDMX):
                            ID = structure_id,
                            version = structure_version)
         else:
-            raise Exception(f'{self.name}: Complex ProvisionAgreements not supported')
-        provider = root.find(f'.//{self._get_ns("ProvisionAgreement")}'
+            raise Exception(f'{self.name}: Invalid ProvisionAgreements, reference to multiple strucutres.')
+        provider = root.findall(f'.//{self._get_ns("ProvisionAgreement")}'
                       f'/{self._get_ns("DataProvider")}', self.namespaces
                       )
-        self.provider = provider[0].attrib['id'] # TODO: clean up and expand 
+        if len(provider) == 1:
+            self.provider = provider[0].attrib['id'] #TODO get human readable provider https://registry.sdmx.org/ws/public/sdmxapi/rest/dataproviderscheme/SDMX
+        else:
+            raise Exception(f'{self.name}: Invalid ProvisionAgreements, reference to multiple providers.')             
 
 
 class _ValidateSeriesWithDSD():
