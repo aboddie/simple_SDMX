@@ -215,6 +215,11 @@ class Dataflow(SDMX):
         else:
             raise Exception(f'{self.name}: Complex dataflows not supported') #TODO clean up
             
+class dataproviders(SDMX):
+    __slots__ = ['name', 'providers']
+    def _extra_steps(self, root: ET.Element, timeout: int) -> None:
+        pass #TODO build out data providers information, similar to codelist
+             #and use in Provision Agreements to get humand readable.
 
 class ProvisionAgreements(SDMX):
     '''The ProvisionAgreements class is based on the SDMX class. It adds a name and provider 
