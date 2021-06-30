@@ -84,8 +84,6 @@ class SDMX():
             request = urllib.request.Request(uri, headers=headers)
             try:
                 xml = urllib.request.urlopen(request, timeout=timeout, context=ssl._create_unverified_context()).read()
-                # Add context=ssl._create_unverified_context()
-                # to urlopen if needed
             except urllib.error.HTTPError as error:
                 raise Exception(f'{type(self).__name__}: {error.code} Error connecting to url provided: {uri}')
             except urllib.error.URLError:
