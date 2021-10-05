@@ -23,13 +23,16 @@ from typing import Optional
 from typing import Tuple
 
 
-def append_client_id(url: str, client_id: str) -> str:
+def append_client_id(url: str, odfa_client_id: str, knoema_client_id: str) -> str:
     '''Return url with client id appended if the site was created by Knoema. If
     site was not created by Knoema returns url.
     '''
-    if (url.find('opendataforafrica.org') > 0) or (url.find('knoema.com') > 0):
+    if (url.find('opendataforafrica.org') > 0):
         if url.find('&client_id') == -1:
-            return f'{url}&client_id={client_id}'
+            return f'{url}&client_id={odfa_client_id}'
+    if (url.find('knoema.com') > 0):
+        if url.find('&client_id') == -1:
+            return f'{url}&client_id={knoema_client_id}'
     return url
 
 
@@ -47,7 +50,6 @@ class Structure_Signature(NamedTuple):
         ENTRY_URL = {
             "IMF": "https://sdmxcentral.imf.org/ws/public/sdmxapi/rest/",
             "SDMX": "https://registry.sdmx.org/ws/public/sdmxapi/rest/",
-            "OECD": "http://stats.oecd.org/restsdmx/sdmx.ashx/",
             "UNSD": "http://data.un.org/ws/rest/"
             }
     
@@ -112,8 +114,12 @@ class SDMX():
                 for element in root.find(f'{{{self.namespaces[""]}}}Header'):
                     self.header[element.tag.rpartition('}')[2]] = element.text
             except (TypeError, KeyError):
-                for element in root.find(f'{{{self.namespaces["message"]}}}Header'):
-                    self.header[element.tag.rpartition('}')[2]] = element.text
+                try:
+                    for element in root.find(f'{{{self.namespaces["message"]}}}Header'):
+                        self.header[element.tag.rpartition('}')[2]] = element.text
+                except (TypeError, KeyError):
+                    #Can't get header with this logic
+                    pass   
         self._extra_steps(root, timeout)
 
     def _extra_steps(self, root: ET.Element, timeout: int) -> None:
@@ -503,6 +509,7 @@ class SDMXDataFile(SDMX):
             # TODO: what if the refernce is not a DSD need to check
         elif structure.stype == 'dataprovision':
             url = structure.generate_url()
+            #TODO: add support for provision agreements
             raise Exception(f'Provision agreements not support, and generally not publicly accessible: {url}')
         elif structure.stype == 'datastructure':
             self.dsd = structure
@@ -521,11 +528,12 @@ class SDMXDataFile(SDMX):
 
     @staticmethod
     def _get_structure_signiture(namespaces: Dict[str, str]) -> Structure_Signature:
+        phrases = [('dataflow','urn:sdmx:org.sdmx.infomodel.datastructure.dataflow='),
+                   ('dataprovision','urn:sdmx:org.sdmx.infomodel.registry.provisionagreement='),
+                   ('datastructure','urn:sdmx:org.sdmx.infomodel.datastructure.datastructure='),
+                   ('datastructure','urn:sdmx:org.sdmx.infomodel.keyfamily.keyfamily=')]
+
         for uri in namespaces.values():
-            phrases = [('dataflow','urn:sdmx:org.sdmx.infomodel.datastructure.dataflow='),
-                       ('dataprovision','urn:sdmx:org.sdmx.infomodel.registry.provisionagreement='),
-                       ('datastructure','urn:sdmx:org.sdmx.infomodel.datastructure.datastructure='),
-                       ('datastructure','urn:sdmx:org.sdmx.infomodel.keyfamily.keyfamily=')]
             structuretype, _, structuredef = uri.partition('=')
             for phrasetype, phrase in phrases:
                 if uri.lower().startswith(phrase):
