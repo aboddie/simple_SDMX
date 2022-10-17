@@ -4,9 +4,7 @@ In particular this module provides a base SDMX object useful for reading the
 header or getting the SDMX version. In addition specialized objects for DSDs,
 codelists, SDMX time series files, and timeseiries are provided.
 """
-# from __future__ import annotations
-# TODO: with Python 3.7 un comment out and add back typehints for DSD, SDMX,
-# and SDMXtimeseries objects _ functions and __eq__.
+from __future__ import annotations
 
 __version__ = '0.1'
 __author__ = 'Allen Boddie'
@@ -23,16 +21,13 @@ from typing import Optional
 from typing import Tuple
 
 
-def append_client_id(url: str, odfa_client_id: str, knoema_client_id: str) -> str:
-    '''Return url with client id appended if the site was created by Knoema. If
-    site was not created by Knoema returns url.
+def append_client_id(url: str, odfa_client_id: str) -> str:
+    '''Return url with client id appended if the site id from Open Data for 
+    Africa otherwise returns url without client id.
     '''
     if (url.find('opendataforafrica.org') > 0):
         if url.find('&client_id') == -1:
             return f'{url}&client_id={odfa_client_id}'
-    if (url.find('knoema.com') > 0):
-        if url.find('&client_id') == -1:
-            return f'{url}&client_id={knoema_client_id}'
     return url
 
 
@@ -124,8 +119,8 @@ class SDMX():
 
     def _extra_steps(self, root: ET.Element, timeout: int) -> None:
         '''Sets up subclasses. use this instead of super().__init__ because
-        do not want to carry around root which could be big. Probably a better
-        way.'''
+        do not want to carry around root which could be big. There is probably 
+        a better way to do this.'''
 
     def __repr__(self) -> str:
         return f'{type(self).__name__}(\'{self.uri}\')'
@@ -139,7 +134,7 @@ class SDMX():
     def __hash__(self) -> int:
         return hash(self.uri)
 
-    def __eq__(self, other) -> bool:
+    def __eq__(self, other: SDMX) -> bool:
         if isinstance(other, self.__class__):
             return self.uri == other.uri
         return False
@@ -217,7 +212,7 @@ class Dataflow(SDMX):
                            ID = structure_id,
                            version = structure_version)
         else:
-            raise Exception(f'{self.name}: Complex dataflows not supported') #TODO clean up
+            raise Exception(f'{self.name}: Invalid Dataflow, reference to multiple strucutres.')
             
 class dataproviders(SDMX):
     __slots__ = ['name', 'providers']
@@ -264,7 +259,7 @@ class _ValidateSeriesWithDSD():
     '''Private class used to mix these functions into DSD and series.'''
 
     @staticmethod
-    def _validate_series(dsd, series) -> bool:
+    def _validate_series(dsd: DSD, series: SDMXTimeseries) -> bool:
         '''Returns true if all dimensions for DSD are present and populated
         with valid values.
         '''
@@ -277,7 +272,7 @@ class _ValidateSeriesWithDSD():
         return True
 
     @staticmethod
-    def _validate_series_details(dsd, series) -> Dict[str, bool]:
+    def _validate_series_details(dsd: DSD, series: SDMXTimeseries) -> Dict[str, bool]:
         '''Returns a dict with true or false for each dimension on the DSD.'''
         conformingdict = dict()
         for dim, code_list in dsd.dimensions.items():
@@ -288,7 +283,7 @@ class _ValidateSeriesWithDSD():
         return conformingdict
 
     @staticmethod
-    def _validate_series_dimnension(dsd, series, dimension: str) -> bool:
+    def _validate_series_dimnension(dsd: DSD, series: SDMXTimeseries, dimension: str) -> bool:
         '''Returns true if series has a valid entery in the
         supplied dimension.
         '''
@@ -299,14 +294,15 @@ class _ValidateSeriesWithDSD():
             raise Exception(f'Invalid dimension: {dimension}')
 
     @staticmethod
-    def _name_from_metadata(dsd, series) -> Dict[str, str]:
+    def _name_from_metadata(dsd: DSD, series: SDMXTimeseries) -> Dict[str, str]:
         '''Returns a dictonary with names for dimensions and values.'''
         human_readable = dict()
         for dimension_id, code_list in dsd.dimensions.items():
             human_readable[dimension_id] = code_list.name_from_code(
                 series.metadata.get(dimension_id,''))
             # Not possible to resolve dimension id for example
-            # counterpart area (the dimension name) in ECOFIN
+            # counterpart area (the dimension name) in ECOFIN 
+            #TODO use concept schme maybe to get this
         return human_readable
           
 
@@ -367,21 +363,21 @@ class DSD(_ValidateSeriesWithDSD, SDMX):
                ID = cl_id,
                version = cl_version)
 
-    def validate_series(self, series) -> bool:
+    def validate_series(self, series: SDMXTimeseries) -> bool:
         '''Returns true if all dimensions for DSD are present and populated
         with valid values.
         '''
         return self._validate_series(self, series)
 
-    def validate_series_details(self, series) -> Dict[str, bool]:
+    def validate_series_details(self, series: SDMXTimeseries) -> Dict[str, bool]:
         '''Returns a dict with true or false for each dimension.'''
         return self._validate_series_details(self, series)
 
-    def validate_series_dimnension(self, series, dimension: str) -> bool:
+    def validate_series_dimnension(self, series: SDMXTimeseries, dimension: str) -> bool:
         '''Returns true if series has a valid entery in the given dimension.'''
         return self._validate_series_dimnension(self, series, dimension)
 
-    def name_from_metadata(self, series) -> Dict[str, str]:
+    def name_from_metadata(self, series: SDMXTimeseries) -> Dict[str, str]:
         '''Returns a dictonary with names for dimensions and values.'''
         return self._name_from_metadata(self, series)
 
@@ -418,10 +414,10 @@ class CodeList(SDMX):
 
     def name_from_code(self, code: str) -> str:
         '''Returns the name from the code'''
-#        try:
-        return self.indicators.get(code,'Invalid code')
-#        except KeyError:
-#            raise Exception(f'Invalid code: {code}')
+        try:
+            return self.indicators.get(code)
+        except KeyError:
+            raise Exception(f'Invalid code: {code}')
 
 
 class SDMXTimeseries(_ValidateSeriesWithDSD):
@@ -563,7 +559,7 @@ class SDMXDataFile(SDMX):
         
     def dimensions(self) -> Tuple[str]:
         '''Returns all dimensions used in root.  All series are looped over
-        just in case their is an inconsistency in the file
+        just in case their is an inconsistency in the file.
         '''
         dimension_list = []
         for series in self.series:
