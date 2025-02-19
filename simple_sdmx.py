@@ -11,7 +11,8 @@ __author__ = 'Allen Boddie'
 
 import io
 import ssl
-import urllib
+import urllib.parse
+import urllib.request
 import xml.etree.ElementTree as ET
 
 from typing import Dict
