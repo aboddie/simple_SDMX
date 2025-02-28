@@ -11,7 +11,9 @@ __author__ = 'Allen Boddie'
 
 import io
 import ssl
-import urllib
+#import urllib
+import urllib.parse
+import urllib.request
 import xml.etree.ElementTree as ET
 
 from typing import Dict
@@ -22,7 +24,7 @@ from typing import Tuple
 
 
 def append_client_id(url: str, odfa_client_id: str) -> str:
-    '''Return url with client id appended if the site id from Open Data for 
+    '''Return url with client id appended if the site id from Open Data for
     Africa otherwise returns url without client id.
     '''
     if (url.find('opendataforafrica.org') > 0):
@@ -232,18 +234,18 @@ class ProvisionAgreements(SDMX):
                               f'/{self._get_ns("Name")}', self.namespaces
                               ).text
         structure = root.findall(f'.//{self._get_ns("ProvisionAgreement")}'
-                              f'/{self._get_ns("StructureUsage")}', self.namespaces
-                              )
+                                 f'/{self._get_ns("StructureUsage")}', self.namespaces
+                                 )
         if len(structure) == 1:
             structure_attrib = structure[0][0].attrib
             agency_id = structure_attrib['agencyID']
             structure_id = structure_attrib['id']
             structure_version = structure_attrib['version']
             structure_type = structure_attrib['class'].lower()
-            self.structure = Structure_Signature(stype = structure_type,
-                           agencyID = agency_id,
-                           ID = structure_id,
-                           version = structure_version)
+            self.structure = Structure_Signature(stype=structure_type,
+                                                 agencyID=agency_id,
+                                                 ID=structure_id,
+                                                 version=structure_version)
         else:
             raise Exception(f'{self.name}: Invalid ProvisionAgreements, reference to multiple strucutres.')
         provider = root.findall(f'.//{self._get_ns("ProvisionAgreement")}'
@@ -299,7 +301,8 @@ class _ValidateSeriesWithDSD():
         human_readable = dict()
         for dimension_id, code_list in dsd.dimensions.items():
             human_readable[dimension_id] = code_list.name_from_code(
-                series.metadata.get(dimension_id,''))
+                series.metadata.get(dimension_id, 'Invalid code'))
+
             # Not possible to resolve dimension id for example
             # counterpart area (the dimension name) in ECOFIN 
             #TODO use concept schme maybe to get this
@@ -415,9 +418,10 @@ class CodeList(SDMX):
     def name_from_code(self, code: str) -> str:
         '''Returns the name from the code'''
         try:
-            return self.indicators.get(code)
+            return self.indicators[code]
         except KeyError:
-            raise Exception(f'Invalid code: {code}')
+            return 'Invalid code'
+            #raise Exception(f'Invalid code: {code}')
 
 
 class SDMXTimeseries(_ValidateSeriesWithDSD):
@@ -457,11 +461,23 @@ class SDMXTimeseries(_ValidateSeriesWithDSD):
     @property
     def last_observation(self) -> str:
         '''Returns last date with has data.'''
-        return self.time_period_coverage[-1]
+        try:
+            return self.time_period_coverage[-1]
+        except IndexError:
+            return 'N.A.'
+
+    @property
+    def has_nonzero_data(self) -> bool:
+        '''Returns true if one datapoint contains non-zero data'''
+        if len(self.data) == 0:
+            return False
+        elif min(self.data) == max(self.data) == 0:
+            return False
+        return True
 
     @property
     def has_invalid_data(self) -> bool:
-        '''Returns last date with has data.'''
+        '''Returns if invalid data exists.'''
         return len(self.invalid_data) > 0
 
     def validate_series(self, dsd: DSD) -> bool:
